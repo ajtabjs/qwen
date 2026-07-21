@@ -206,8 +206,20 @@ class DistanceCalculator:
         self.logger = logger
         self.config = config or {}
         self.min_hole_x = self.config.get('min_hole_x_native', 20)
+        self.fallback_min_hole_x = self.config.get('fallback_min_hole_x_native', 8)
         self.cv2_threshold = self.config.get('template_match_threshold', 0.30)
         self.voting_tolerance = self.config.get('distance_voting_tolerance', 5.0)
+
+    def _is_valid_hole_x(self, hole_x1: float, data: Dict, relaxed: bool = False) -> bool:
+        min_x = self.fallback_min_hole_x if relaxed else self.min_hole_x
+        if hole_x1 < min_x:
+            return False
+
+        bg_width = float(data.get('bg_natural_width') or 0)
+        if bg_width > 0 and hole_x1 > (bg_width - 5):
+            return False
+
+        return True
 
     def calculate(self, captcha_data: Dict) -> Optional[VoteResult]:
         if not _HAS_PIL or not _HAS_CV2:
@@ -328,7 +340,7 @@ class DistanceCalculator:
                 return None
 
             hole_x1, _, hole_x2, _ = target
-            if hole_x1 < self.min_hole_x:
+            if not self._is_valid_hole_x(hole_x1, data):
                 self.logger.debug(f"ddddocr_cropped: rejected origin match x1={hole_x1}")
                 return None
 
@@ -362,7 +374,7 @@ class DistanceCalculator:
                 return None
 
             hole_x1, _, hole_x2, _ = target
-            if hole_x1 < self.min_hole_x:
+            if not self._is_valid_hole_x(hole_x1, data):
                 return None
 
             distance = self._to_drag_distance(hole_x1, hole_x2, x1, x2, data)
@@ -417,7 +429,7 @@ class DistanceCalculator:
             hole_x1 = float(max_loc[0] + x1)
             hole_x2 = hole_x1 + piece_w
 
-            if hole_x1 < self.min_hole_x:
+            if not self._is_valid_hole_x(hole_x1, data):
                 return None
 
             distance = self._to_drag_distance(hole_x1, hole_x2, x1, x2, data)
@@ -470,7 +482,7 @@ class DistanceCalculator:
             hole_x1 = float(max_loc[0] + x1)
             hole_x2 = hole_x1 + piece_w
 
-            if hole_x1 < self.min_hole_x:
+            if not self._is_valid_hole_x(hole_x1, data):
                 return None
 
             distance = self._to_drag_distance(hole_x1, hole_x2, x1, x2, data)
@@ -538,7 +550,7 @@ class DistanceCalculator:
             hole_x1 = float(hole_center_native - piece_w / 2)
             hole_x2 = float(hole_center_native + piece_w / 2)
 
-            if hole_x1 < self.min_hole_x:
+            if not self._is_valid_hole_x(hole_x1, data):
                 return None
 
             distance = self._to_drag_distance(hole_x1, hole_x2, x1, x2, data)
@@ -573,7 +585,7 @@ class DistanceCalculator:
             piece_w = x2 - x1
             hole_x1 = float(hole_center_native - piece_w / 2)
             hole_x2 = float(hole_center_native + piece_w / 2)
-            if hole_x1 < self.min_hole_x:
+            if not self._is_valid_hole_x(hole_x1, data):
                 return None
             distance = self._to_drag_distance(hole_x1, hole_x2, x1, x2, data)
             return DistanceResult(
@@ -640,27 +652,58 @@ class DistanceCalculator:
 
     def _fallback_ddddocr_only(self, data: Dict) -> Optional[VoteResult]:
         try:
-            result = self.ocr.slide_match(data['shadow_bytes'], data['bg_bytes'],
-                                          simple_target=False)
-            if not result or 'target' not in result:
-                return None
-            target = result['target']
-            if len(target) < 4:
+            piece_x1 = None
+            piece_x2 = None
+            if _HAS_PIL:
+                try:
+                    puzzle_img = Image.open(io.BytesIO(data['shadow_bytes'])).convert('RGBA')
+                    bbox = self._extract_piece_bbox(puzzle_img)
+                    if bbox:
+                        piece_x1, _, piece_x2, _ = bbox
+                except Exception:
+                    pass
+
+            if piece_x1 is None or piece_x2 is None:
+                puzzle_w = data.get('puzzle_natural_width') or 60
+                piece_x1 = int(puzzle_w * 0.25)
+                piece_x2 = int(puzzle_w * 0.75)
+
+            best: Optional[Tuple[float, float, bool]] = None
+            for simple in (False, True):
+                result = self.ocr.slide_match(
+                    data['shadow_bytes'], data['bg_bytes'], simple_target=simple
+                )
+                if not result or 'target' not in result:
+                    continue
+
+                target = result['target']
+                if len(target) < 4:
+                    continue
+
+                hole_x1, _, hole_x2, _ = target
+                strict_ok = self._is_valid_hole_x(hole_x1, data, relaxed=False)
+                relaxed_ok = strict_ok or self._is_valid_hole_x(hole_x1, data, relaxed=True)
+                if not relaxed_ok:
+                    continue
+
+                distance = self._to_drag_distance(hole_x1, hole_x2, piece_x1, piece_x2, data)
+                confidence = 0.4 if strict_ok else 0.25
+
+                if best is None or confidence > best[1]:
+                    best = (distance, confidence, strict_ok)
+
+            if not best:
                 return None
 
-            hole_x1, _, hole_x2, _ = target
-            if hole_x1 < self.min_hole_x:
-                return None
+            distance, confidence, strict_ok = best
+            if not strict_ok:
+                self.logger.warning(
+                    f"Fallback accepted relaxed hole position (<{self.min_hole_x}px)"
+                )
 
-            puzzle_w = data.get('puzzle_natural_width') or 60
-            piece_x1 = int(puzzle_w * 0.25)
-            piece_x2 = int(puzzle_w * 0.75)
-
-            distance = self._to_drag_distance(hole_x1, hole_x2,
-                                              piece_x1, piece_x2, data)
             return VoteResult(
                 distance=distance,
-                confidence=0.4,
+                confidence=confidence,
                 methods={'ddddocr_only': distance},
                 spread=0.0,
             )

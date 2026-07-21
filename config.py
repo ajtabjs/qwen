@@ -11,6 +11,7 @@ CONFIG = {
     'max_captcha_attempts': 15,
     'result_poll_count': 60,
     'min_hole_x_native': 50,
+    'fallback_min_hole_x_native': 8,
     'template_match_threshold': 0.20,
     'distance_voting_tolerance': 5.0,
     'min_confidence_threshold': 0.0,
