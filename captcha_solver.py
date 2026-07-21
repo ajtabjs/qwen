@@ -249,7 +249,12 @@ class DistanceCalculator:
             results.append(r)
 
         if not results:
-            self.logger.warning("All distance methods returned no result — using ddddocr-only fallback")
+            self.logger.warning(
+                "All distance methods returned no result — using ddddocr-only fallback "
+                f"(mode={captcha_data.get('capture_mode', 'unknown')}, "
+                f"bg={len(captcha_data.get('bg_bytes', b''))}B, "
+                f"piece={len(captcha_data.get('shadow_bytes', b''))}B)"
+            )
             return self._fallback_ddddocr_only(captcha_data)
 
         return self._vote(results)
@@ -1081,7 +1086,6 @@ class CaptchaSolver:
                     const bg = document.querySelector('#aliyunCaptcha-img');
                     const puzzle = document.querySelector('#aliyunCaptcha-puzzle');
                     if (!bg || !puzzle) return null;
-                    if (!bg.src || !puzzle.src) return null;
 
                     const bgRect = bg.getBoundingClientRect();
                     const puzzleRect = puzzle.getBoundingClientRect();
@@ -1099,13 +1103,12 @@ class CaptchaSolver:
                         } catch (e) { return null; }
                     };
 
-                    const bg_b64 = await fetchImage(bg.src);
-                    const shadow_b64 = await fetchImage(puzzle.src);
-                    if (!bg_b64 || !shadow_b64) return null;
+                    const bg_b64 = bg.src ? await fetchImage(bg.src) : null;
+                    const shadow_b64 = puzzle.src ? await fetchImage(puzzle.src) : null;
 
                     return {
-                        bg_b64: bg_b64,
-                        shadow_b64: shadow_b64,
+                        bg_b64,
+                        shadow_b64,
                         bg_css_width: bgRect.width,
                         bg_natural_width: bg.naturalWidth || bg.width || 300,
                         puzzle_css_width: puzzleRect.width,
@@ -1123,7 +1126,7 @@ class CaptchaSolver:
                         and data.get('puzzle_natural_width', 0) > 10):
                     break
                 time.sleep(0.1)
-                data = page.evaluate("""
+                dims = page.evaluate("""
                     () => {
                         const bg = document.querySelector('#aliyunCaptcha-img');
                         const puzzle = document.querySelector('#aliyunCaptcha-puzzle');
@@ -1139,8 +1142,9 @@ class CaptchaSolver:
                         };
                     }
                 """)
-                if not data:
+                if not dims:
                     return None
+                data.update(dims)
 
             def get_bytes(b64):
                 if not b64:
@@ -1149,8 +1153,33 @@ class CaptchaSolver:
                     return base64.b64decode(b64.split(',')[1])
                 return base64.b64decode(b64)
 
-            bg_bytes = get_bytes(data['bg_b64'])
-            shadow_bytes = get_bytes(data['shadow_b64'])
+            bg_bytes = get_bytes(data.get('bg_b64'))
+            shadow_bytes = get_bytes(data.get('shadow_b64'))
+            capture_pref = str(self.config.get('captcha_capture_mode', 'auto')).lower()
+            capture_mode = 'src-fetch'
+
+            use_screenshot_fallback = (
+                capture_pref == 'screenshot'
+                or (
+                    capture_pref == 'auto'
+                    and (
+                        not bg_bytes
+                        or not shadow_bytes
+                        or len(bg_bytes) < 2048
+                        or len(shadow_bytes) < 512
+                        or bg_bytes == shadow_bytes
+                    )
+                )
+            )
+
+            if use_screenshot_fallback:
+                try:
+                    bg_bytes = page.locator('#aliyunCaptcha-img').screenshot(type='png')
+                    shadow_bytes = page.locator('#aliyunCaptcha-puzzle').screenshot(type='png')
+                    capture_mode = 'element-screenshot'
+                except Exception:
+                    return None
+
             if not shadow_bytes or not bg_bytes:
                 return None
 
@@ -1162,6 +1191,7 @@ class CaptchaSolver:
                 'puzzle_css_width': data['puzzle_css_width'],
                 'puzzle_natural_width': data['puzzle_natural_width'],
                 'puzzle_left_css': data['puzzle_left_css'],
+                'capture_mode': capture_mode,
             }
         except Exception as e:
             self.logger.debug(f"Error getting captcha data: {e}")

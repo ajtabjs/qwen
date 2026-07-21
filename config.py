@@ -17,6 +17,7 @@ CONFIG = {
     'min_confidence_threshold': 0.0,
     'max_acceptable_spread': 30.0,
     'min_acceptable_confidence': 0.40,
+    'captcha_capture_mode': 'auto',  # auto | src | screenshot
 
     # Drag behavior
     'drag_dead_zone': 96.0,
