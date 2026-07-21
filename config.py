@@ -14,14 +14,14 @@ CONFIG = {
     'fallback_min_hole_x_native': 8,
     'template_match_threshold': 0.20,
     'distance_voting_tolerance': 5.0,
-    'min_confidence_threshold': 0.0,
-    'max_acceptable_spread': 30.0,
-    'min_acceptable_confidence': 0.40,
-    'captcha_capture_mode': 'screenshot',  # auto | src | screenshot
+    'min_confidence_threshold': 0.1,
+    'max_acceptable_spread': 25.0,
+    'min_acceptable_confidence': 0.35,
+    'captcha_capture_mode': 'auto',  # auto | src | screenshot
 
     # Drag behavior
-    'drag_dead_zone': 96.0,
-    'drag_ratio': 1.55,
+    'drag_dead_zone': 72.0,
+    'drag_ratio': 1.2,
 
     # Adaptive offset (tweaks drag after failures)
     'enable_adaptive_offset': False,
