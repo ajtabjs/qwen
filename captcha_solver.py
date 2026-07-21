@@ -237,7 +237,8 @@ class DistanceCalculator:
             results.append(r)
 
         if not results:
-            return None
+            self.logger.warning("All distance methods returned no result — using ddddocr-only fallback")
+            return self._fallback_ddddocr_only(captcha_data)
 
         return self._vote(results)
 
