@@ -267,6 +267,15 @@ class DistanceCalculator:
         if arr.shape[2] >= 4:
             alpha = arr[:, :, 3]
             mask = alpha > 30
+            # Some devices render puzzle piece as opaque/composited (alpha mostly full).
+            # In that case alpha mask becomes the whole rectangle and is not useful.
+            if mask.mean() > 0.95:
+                rgb = arr[:, :, :3].astype(np.float32)
+                gray = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2])
+                g_med = float(np.median(gray))
+                g_std = float(np.std(gray))
+                delta = max(8.0, min(28.0, g_std * 0.9))
+                mask = np.abs(gray - g_med) > delta
         else:
             gray = arr[:, :, 0]
             mask = gray < 240
@@ -403,13 +412,21 @@ class DistanceCalculator:
             if arr.ndim != 3 or arr.shape[2] < 4:
                 return None
             alpha = arr[:, :, 3]
+            piece_gray = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2GRAY)
 
             bbox = self._extract_piece_bbox(puzzle_img)
             if not bbox:
                 return None
             x1, y1, x2, y2 = bbox
 
-            piece_edges = cv2.Canny(alpha, 50, 150)
+            piece_edges_alpha = cv2.Canny(alpha, 50, 150)
+            piece_edges_gray = cv2.Canny(piece_gray, 50, 150)
+            if piece_edges_alpha.max() > 0 and piece_edges_gray.max() > 0:
+                piece_edges = cv2.max(piece_edges_alpha, piece_edges_gray)
+            elif piece_edges_gray.max() > 0:
+                piece_edges = piece_edges_gray
+            else:
+                piece_edges = piece_edges_alpha
 
             bg_arr = np.array(Image.open(io.BytesIO(data['bg_bytes'])).convert('RGB'))
             bg_gray = cv2.cvtColor(bg_arr, cv2.COLOR_RGB2GRAY)
