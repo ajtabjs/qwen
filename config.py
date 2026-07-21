@@ -1,6 +1,6 @@
 CONFIG = {
     # General
-    'count': 10,
+    'count': 1,
     'threads': 5,
     'headless': False, # headless DOES NOT WORK!
     'timeout': 30000,
