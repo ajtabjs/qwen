@@ -1,0 +1,6 @@
+rebrowser-playwright
+ddddocr
+opencv-python
+Pillow
+numpy
+requests
