@@ -18,6 +18,8 @@ CONFIG = {
     'max_acceptable_spread': 25.0,
     'min_acceptable_confidence': 0.35,
     'captcha_capture_mode': 'auto',  # auto | src | screenshot
+    'min_src_bg_bytes': 4096,
+    'min_src_piece_bytes': 3200,
 
     # Drag behavior
     'drag_dead_zone': 72.0,

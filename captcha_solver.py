@@ -1165,31 +1165,70 @@ class CaptchaSolver:
 
             def get_bytes(b64):
                 if not b64:
-                    return None
+                    return None, None
                 if b64.startswith('data:image'):
-                    return base64.b64decode(b64.split(',')[1])
-                return base64.b64decode(b64)
+                    head, payload = b64.split(',', 1)
+                    mime = head.split(';', 1)[0].split(':', 1)[-1].strip().lower()
+                    return base64.b64decode(payload), mime
+                return base64.b64decode(b64), None
 
-            bg_bytes = get_bytes(data.get('bg_b64'))
-            shadow_bytes = get_bytes(data.get('shadow_b64'))
+            def normalize_to_png(raw: bytes) -> Optional[bytes]:
+                if not raw:
+                    return None
+                if not _HAS_PIL:
+                    return raw
+                try:
+                    img = Image.open(io.BytesIO(raw))
+                    out = io.BytesIO()
+                    img.convert('RGBA').save(out, format='PNG')
+                    return out.getvalue()
+                except Exception:
+                    return None
+
+            bg_bytes, bg_mime = get_bytes(data.get('bg_b64'))
+            shadow_bytes, shadow_mime = get_bytes(data.get('shadow_b64'))
             capture_pref = str(self.config.get('captcha_capture_mode', 'auto')).lower()
             capture_mode = 'src-fetch'
+            min_src_bg = int(self.config.get('min_src_bg_bytes', 4096))
+            min_src_piece = int(self.config.get('min_src_piece_bytes', 3200))
+
+            unsupported_src = {'image/svg+xml', 'image/gif', 'image/avif'}
+            src_unusable = (
+                not bg_bytes
+                or not shadow_bytes
+                or len(bg_bytes) < min_src_bg
+                or len(shadow_bytes) < min_src_piece
+                or bg_bytes == shadow_bytes
+                or (bg_mime in unsupported_src)
+                or (shadow_mime in unsupported_src)
+            )
+
+            if not src_unusable:
+                norm_bg = normalize_to_png(bg_bytes)
+                norm_shadow = normalize_to_png(shadow_bytes)
+                if norm_bg and norm_shadow:
+                    bg_bytes = norm_bg
+                    shadow_bytes = norm_shadow
+                    capture_mode = 'src-fetch-png'
+                else:
+                    src_unusable = True
 
             use_screenshot_fallback = (
                 capture_pref == 'screenshot'
                 or (
                     capture_pref == 'auto'
-                    and (
-                        not bg_bytes
-                        or not shadow_bytes
-                        or len(bg_bytes) < 2048
-                        or len(shadow_bytes) < 512
-                        or bg_bytes == shadow_bytes
-                    )
+                    and src_unusable
                 )
+                or (capture_pref == 'src' and src_unusable)
             )
 
             if use_screenshot_fallback:
+                if src_unusable:
+                    self.logger.info(
+                        "    src-fetch image quality unusable; switching to element screenshots "
+                        f"(bg={len(bg_bytes or b'')}B/{bg_mime or 'unknown'}, "
+                        f"piece={len(shadow_bytes or b'')}B/{shadow_mime or 'unknown'})"
+                    )
                 try:
                     bg_bytes = page.locator('#aliyunCaptcha-img').screenshot(type='png')
                     shadow_bytes = page.locator('#aliyunCaptcha-puzzle').screenshot(type='png')
